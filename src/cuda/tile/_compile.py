@@ -90,7 +90,7 @@ def _get_final_ir(pyfunc, args) -> ir.Function:
 
 def _log_mlir(bytecode_buf):
     try:
-        from cuda.tile.internal import _internal_cext
+        from cuda.tile_internal import _internal_cext
     except ImportError:
         print("Can't print MLIR because the internal extension is missing", file=sys.stderr)
         return
@@ -136,7 +136,7 @@ def compile_tile(pyfunc, args, compiler_options: CompilerOptions) -> TileLibrary
     # Write MLIR module to file
     if CUDA_TILE_DUMP_TILEIR is not None:
         try:
-            from cuda.tile.internal._internal_cext import bytecode_to_mlir_text
+            from cuda.tile_internal._internal_cext import bytecode_to_mlir_text
             mlir_text = bytecode_to_mlir_text(bytecode_buf)
             if not os.path.exists(CUDA_TILE_DUMP_TILEIR):
                 os.makedirs(CUDA_TILE_DUMP_TILEIR)
