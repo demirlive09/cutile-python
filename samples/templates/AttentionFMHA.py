@@ -9,12 +9,14 @@ import math
 
 from torch.nn.functional import scaled_dot_product_attention
 from torch.nn.attention import sdpa_kernel, SDPBackend
+from utils.autotuner import Autotuner, Config, autotune
+from utils.benchmark import report_benchmark
 from test.kernels.attention import fmha_kernel
 
 
 # --- Wrapper function to launch the FMHA kernel ---
 def cutile_fmha(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor,
-                qk_scale: float = None,
+                qk_scale: float | None = None,
                 input_pos: int = 0,
                 tile_m: int = 128,
                 tile_n: int = 128,
@@ -85,6 +87,74 @@ def cutile_fmha(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor,
     ))
 
     return Out
+
+
+# --- Wrapper function to launch the FMHA kernel with autotuning ---
+@autotune(
+    search_space=[
+        Config(
+            {
+                'TILE_M': ts_m,
+                'TILE_N': ts_n,
+            },
+            num_ctas=s,
+            occupancy=o,
+        )
+        for ts_m in [128, 64, 32]
+        for ts_n in [128, 64, 32]
+        for s in [1, 2]
+        for o in [1, 2, 4, 8, 16, 32]
+    ]
+)
+def cutile_autotune_fmha(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor,
+                         qk_scale: float,
+                         input_pos: int = 0,
+                         query_group_size: int = 1,
+                         causal: bool = False,
+                         autotuner: Autotuner | None = None) -> tuple[torch.Tensor, dict[str, int]]:
+    """
+    Performs Fused Multi-Head Attention (FMHA) using a cuTile kernel with autotuning.
+
+    Args:
+        Q (torch.Tensor): Query tensor (Batch, Heads, SeqLen_Q, D_k).
+        K (torch.Tensor): Key tensor (Batch, KV_Heads, SeqLen_KV, D_k).
+        V (torch.Tensor): Value tensor (Batch, KV_Heads, SeqLen_KV, D_v).
+        qk_scale (float, optional): Scaling factor for QK dot product. Defaults to 1/sqrt(D_k).
+        input_pos (int, optional): Global start pos for queries (causal masking). Defaults to 0.
+        query_group_size (int): Number of query heads per key/value head.
+        causal (bool): If True, applies causal masking.
+        autotuner (Autotuner | None): Autotuner object that was injected by the autotune decorator.
+
+    Returns:
+        torch.Tensor: Output tensor (Batch, Heads, SeqLen_Q, D_v).
+        dict[str, int]: The best configuration found by the autotuner.
+    """
+    Batch, Heads, SeqLen_Q, D_k = Q.shape
+    _, KV_Heads, SeqLen_KV, D_v = V.shape
+    enable_gqa = Heads != KV_Heads
+
+    # --- Create Output Tensor ---
+    Out = torch.empty((Batch, Heads, SeqLen_Q, D_v), dtype=Q.dtype, device=Q.device)
+
+    # --- Tune/Get the best configuration for the FMHA Kernel ---
+    tuned_result = autotuner(
+        torch.cuda.current_stream(),
+        grid_fn=lambda TILE_M: (math.ceil(SeqLen_Q / TILE_M), Batch * Heads, 1),
+        kernel=fmha_kernel,
+        args_fn=lambda TILE_M, TILE_N: (
+            Q, K, V, Out,
+            qk_scale, input_pos, D_k, Heads,
+            TILE_M, TILE_N, query_group_size, causal, enable_gqa,
+        ),
+        max_iter=20,
+    )
+
+    return Out, {
+        "TILE_M": tuned_result.TILE_M,
+        "TILE_N": tuned_result.TILE_N,
+        "num_ctas": tuned_result.num_ctas,
+        "occupancy": tuned_result.occupancy,
+    }
 
 
 def torch_fmha(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor,
@@ -176,5 +246,56 @@ if __name__ == "__main__":
         print("Correctness check passed")
     else:
         print("Correctness check disabled")
+
+    # Test 3: Causal Attention with autotuning and performance benchmarking.
+    print("\n--- Test 3: Causal Attention with autotuning and performance benchmarking ---")
+    # --- Increase the problem size ---
+    BATCH_SIZE = 8
+    NUM_HEADS = 16
+    SEQ_LEN_Q = 1024
+    SEQ_LEN_KV = 1024
+    D_K = 64
+    D_V = 64
+    QUERY_GROUP_SIZE = 1
+
+    Q_input = torch.randn(BATCH_SIZE, NUM_HEADS, SEQ_LEN_Q, D_K, dtype=DTYPE, device='cuda')
+    K_input = torch.randn(BATCH_SIZE, NUM_HEADS // QUERY_GROUP_SIZE, SEQ_LEN_KV, D_K,
+                          dtype=DTYPE, device='cuda')
+    V_input = torch.randn(BATCH_SIZE, NUM_HEADS // QUERY_GROUP_SIZE, SEQ_LEN_KV, D_V,
+                          dtype=DTYPE, device='cuda')
+    print("New Configuration:")
+    print(f"Input Q shape: {Q_input.shape}")
+    print(f"Input K shape: {K_input.shape}")
+    print(f"Input V shape: {V_input.shape}")
+    output_fmha_cutile_autotune_causal, tuned_config = cutile_autotune_fmha(
+        Q=Q_input, K=K_input, V=V_input,
+        qk_scale=1.0 / math.sqrt(D_K),
+        causal=True,
+        query_group_size=QUERY_GROUP_SIZE
+    )
+    print(f"""cuTile FMHA Output shape (Causal): {output_fmha_cutile_autotune_causal.shape},
+            dtype: {output_fmha_cutile_autotune_causal.dtype}""")
+    print(f"Tuned config: {tuned_config}")
+    if args.correctness_check:
+        ref_fmha = torch_fmha(Q_input, K_input, V_input, is_causal=True, enable_gqa=False)
+        assert torch.allclose(output_fmha_cutile_autotune_causal, ref_fmha, atol=1e-3), \
+            "Causal Attention: Correctness check failed"
+        print("Correctness check passed")
+    else:
+        print("Correctness check disabled")
+
+    stats_cutile_autotuned = report_benchmark(
+        cutile_autotune_fmha,
+        (Q_input, K_input, V_input, 1.0 / math.sqrt(D_K), 0, QUERY_GROUP_SIZE, True)
+    )
+    stats_torch = report_benchmark(
+        torch_fmha,
+        (Q_input, K_input, V_input, True, False)
+    )
+    print("Benchmark results:")
+    print(f"  cuTile FMHA with tuned parameters: {stats_cutile_autotuned['mean_time_ms']:.5f} ms")
+    print(f"  torch FMHA: {stats_torch['mean_time_ms']:.5f} ms")
+    speedup_autotuned = stats_torch["mean_time_ms"] / stats_cutile_autotuned["mean_time_ms"]
+    print(f"Speedup with autotuned parameters: {speedup_autotuned:.3f}x")
 
     print("\n--- cuTile Fused Multi-Head Attention (FMHA) Sample execution complete ---")

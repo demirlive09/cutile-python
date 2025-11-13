@@ -20,5 +20,6 @@ repos:
             ^samples/templates/|
             ^samples/|
             ^test/kernels/
+            ^test/autotuner/autotuner.py
         always_run: false
         require_serial: true

@@ -6,6 +6,7 @@ import argparse
 import ast
 import sys
 import pathlib
+import shutil
 import warnings
 from typing import Dict
 
@@ -235,6 +236,13 @@ def main():
             sample_path = SAMPLES_DIR / py.relative_to(SAMPLES_TEMPLATES_DIR)
             sample_path.write_text("\n".join(out) + "\n", encoding="utf-8")
             print(f"Updated {sample_path.relative_to(ROOT)}")
+
+    # Copy the autotuner.py to the samples directory
+    autotuner_path = ROOT / "test" / "autotuner" / "autotuner.py"
+    samples_autotuner_path = SAMPLES_DIR / "utils" / "autotuner.py"
+    shutil.copy(autotuner_path, samples_autotuner_path)
+    print(f"Copied {autotuner_path.relative_to(ROOT)} to "
+          f"{samples_autotuner_path.relative_to(ROOT)}")
 
 
 if __name__ == "__main__":
