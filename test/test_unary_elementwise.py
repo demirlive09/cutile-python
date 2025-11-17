@@ -78,24 +78,26 @@ def tile():
 # === End of Helpers ===
 
 
-@pytest.mark.parametrize("dtype", float_dtypes, ids=dtype_id)
+@pytest.mark.parametrize("dtype", bool_dtypes + int_dtypes + float_dtypes, ids=dtype_id)
 @pytest.mark.parametrize("op", ['sqrt', 'rsqrt'], ids=['sqrt', 'rsqrt'])
 def test_array_root_ops(shape, tile, dtype, op, tmp_path):
     x = make_tensor(shape, dtype=dtype, low=0, high=100, device='cuda')
-    y = torch.zeros_like(x, device="cuda")
+    y_ref = getattr(torch, op)(x)
+    y = torch.zeros_like(y_ref, device="cuda")
     kernel = array_kernel(op, f"ty = ct.{op}(tx)", tmp_path)
     launch_unary(kernel, x, y, tile)
-    assert_equal(y, getattr(torch, op)(x))
+    assert_equal(y, y_ref)
 
 
 @pytest.mark.use_mlir
-@pytest.mark.parametrize("dtype", float_dtypes, ids=dtype_id)
+@pytest.mark.parametrize("dtype", bool_dtypes + int_dtypes + float_dtypes, ids=dtype_id)
 @pytest.mark.parametrize("op", ['sqrt', 'rsqrt'], ids=['sqrt', 'rsqrt'])
 @pytest.mark.parametrize("flush_to_zero", [True, False])
 def test_array_root_ops_flush_to_zero(shape, tile, dtype, op, flush_to_zero, tmp_path):
-    should_raise = flush_to_zero and (dtype != torch.float32)
+    should_raise = flush_to_zero and dtype in float_dtypes and dtype != torch.float32
     x = make_tensor(shape, dtype=dtype, low=0, high=100, device='cuda')
-    y = torch.zeros_like(x, device="cuda")
+    y_ref = getattr(torch, op)(x)
+    y = torch.zeros_like(y_ref, device="cuda")
     kernel = array_kernel(f"{op}_flush_to_zero",
                           f"ty = ct.{op}(tx, flush_to_zero={flush_to_zero})",
                           tmp_path)
@@ -119,7 +121,8 @@ def test_array_root_ops_flush_to_zero(shape, tile, dtype, op, flush_to_zero, tmp
                          [RMd.RN, RMd.RZ, RMd.RM, RMd.RP, RMd.FULL, RMd.APPROX, RMd.RZI])
 def test_array_sqrt_rounding_mode(shape, tile, dtype, rounding_mode, tmp_path):
     should_raise_rounding_mode = rounding_mode in [RMd.RZI, RMd.FULL]
-    should_raise_dtype = rounding_mode in [RMd.APPROX] and dtype != torch.float32
+    should_raise_dtype = (rounding_mode in [RMd.APPROX]
+                          and dtype in float_dtypes and dtype != torch.float32)
     x = make_tensor(shape, dtype=dtype, low=0, high=100, device='cuda')
     y = torch.zeros_like(x, device="cuda")
     kernel = array_kernel("sqrt_rounding_mode",
@@ -148,36 +151,39 @@ def test_array_sqrt_rounding_mode(shape, tile, dtype, rounding_mode, tmp_path):
 
 
 @pytest.mark.parametrize("op", ['log', 'log2'], ids=['log', 'log2'])
-@pytest.mark.parametrize("dtype", float_dtypes, ids=dtype_id)
+@pytest.mark.parametrize("dtype", bool_dtypes + int_dtypes + float_dtypes, ids=dtype_id)
 def test_array_log(shape, tile, dtype, op, tmp_path):
     x = make_tensor(shape, dtype=dtype, low=0, high=100, device='cuda')
-    y = torch.zeros_like(x, device="cuda")
+    y_ref = getattr(torch, op)(x)
+    y = torch.zeros_like(y_ref, device="cuda")
     kernel = array_kernel('log', f"ty = ct.{op}(tx)", tmp_path)
     launch_unary(kernel, x, y, tile)
-    assert_equal(y, getattr(torch, op)(x))
+    assert_equal(y, y_ref)
 
 
 @pytest.mark.parametrize("op", ['sin', 'cos', 'tan', 'sinh', 'cosh', 'tanh'],
                          ids=['sin', 'cos', 'tan', 'sinh', 'cosh', 'tanh'])
-@pytest.mark.parametrize("dtype", float_dtypes, ids=dtype_id)
+@pytest.mark.parametrize("dtype", bool_dtypes + int_dtypes + float_dtypes, ids=dtype_id)
 def test_array_trig(shape, tile, dtype, op, tmp_path):
     x = make_tensor(shape, dtype=dtype, device='cuda')
-    y = torch.zeros_like(x, device="cuda")
+    y_ref = getattr(torch, op)(x)
+    y = torch.zeros_like(y_ref, device="cuda")
     kernel = array_kernel('trig', f"ty = ct.{op}(tx)", tmp_path)
     launch_unary(kernel, x, y, tile)
-    assert_equal(y, getattr(torch, op)(x))
+    assert_equal(y, y_ref)
 
 
 @pytest.mark.parametrize("neg_func", ['-', 'ct.negative'])
-@pytest.mark.parametrize("dtype", int_dtypes + float_dtypes, ids=dtype_id)
+@pytest.mark.parametrize("dtype", bool_dtypes + int_dtypes + float_dtypes, ids=dtype_id)
 def test_array_neg(shape, tile, dtype, tmp_path, neg_func):
     x = make_tensor(shape, dtype=dtype, device='cuda')
-    y = torch.zeros_like(x, device="cuda")
+    y_ref = -x.to(torch.int32) if dtype == torch.bool else -x
+    y = torch.zeros_like(y_ref, device="cuda")
     kernel = array_kernel('neg',
                           "ty = -tx" if neg_func == "-" else f"ty = {neg_func}(tx)",
                           tmp_path)
     launch_unary(kernel, x, y, tile)
-    assert_equal(y, -x)
+    assert_equal(y, y_ref)
 
 
 @pytest.mark.parametrize("is_constant", [False, True])
@@ -198,7 +204,17 @@ def test_scalar_neg(shape, tile, is_constant, dtype, tmp_path):
     assert_equal(y, -x)
 
 
-@pytest.mark.parametrize("dtype", int_dtypes + float_dtypes, ids=dtype_id)
+@pytest.mark.parametrize("dtype", bool_dtypes + int_dtypes + float_dtypes, ids=dtype_id)
+def test_array_pos(shape, tile, dtype, tmp_path):
+    x = make_tensor(shape, dtype=dtype, device='cuda')
+    y_ref = x.to(torch.int32) if dtype == torch.bool else +x
+    y = torch.zeros_like(y_ref, device="cuda")
+    kernel = array_kernel('pos', "ty = +tx", tmp_path)
+    launch_unary(kernel, x, y, tile)
+    assert_equal(y, y_ref)
+
+
+@pytest.mark.parametrize("dtype", bool_dtypes + int_dtypes + float_dtypes, ids=dtype_id)
 def test_array_abs(shape, tile, dtype, tmp_path):
     x = make_tensor(shape, dtype=dtype, device='cuda')
     y = torch.zeros_like(x, device="cuda")
@@ -252,13 +268,14 @@ def test_scalar_bitwise_not(shape, tile, is_constant, dtype, tmp_path):
 
 @pytest.mark.parametrize("op", ['exp', 'exp2'],
                          ids=['exp', 'exp2'])
-@pytest.mark.parametrize("dtype", float_dtypes, ids=dtype_id)
+@pytest.mark.parametrize("dtype", bool_dtypes + int_dtypes + float_dtypes, ids=dtype_id)
 def test_array_exp(shape, tile, dtype, op, tmp_path):
     x = make_tensor(shape, dtype=dtype, device='cuda')
-    y = torch.zeros_like(x, device="cuda")
+    y_ref = getattr(torch, op)(x)
+    y = torch.zeros_like(y_ref, device="cuda")
     kernel = array_kernel('exp', f"ty = ct.{op}(tx)", tmp_path)
     launch_unary(kernel, x, y, tile)
-    assert_close(y, getattr(torch, op)(x))
+    assert_close(y, y_ref)
 
 
 @pytest.mark.use_mlir

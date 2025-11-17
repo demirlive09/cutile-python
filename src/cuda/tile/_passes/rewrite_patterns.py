@@ -9,7 +9,7 @@ from typing import Callable, Any, Dict, Sequence, List, Mapping, Set
 from cuda.tile import _datatype as datatype
 from cuda.tile._exception import Loc
 from cuda.tile._ir.ir import Operation, Var, Function, Block, IRContext
-from cuda.tile._ir.ops import RawBinaryArithmeticOperation, FusedMulAddOperation, UnaryOpOperation
+from cuda.tile._ir.ops import RawBinaryArithmeticOperation, FusedMulAddOperation, Unary
 from cuda.tile._ir.ops_utils import get_dtype, get_default_rounding_mode
 from cuda.tile._ir.type import Type
 
@@ -115,7 +115,7 @@ def fuse_mul_addsub(op: RawBinaryArithmeticOperation, ctx: MatchContext):
     if op.fn == "sub":
         negated_acc = ctx.make_temp_var(op.loc)
         ctx.set_type(negated_acc, ctx.typeof(acc))
-        new_ops.append(UnaryOpOperation("neg", acc, None, False, negated_acc, op.loc))
+        new_ops.append(Unary("neg", acc, None, False, negated_acc, op.loc))
         acc = negated_acc
 
     new_ops.append(FusedMulAddOperation(mul_op.lhs, mul_op.rhs, acc, rm, ftz,

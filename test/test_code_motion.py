@@ -9,7 +9,7 @@ import torch
 
 import cuda.tile as ct
 from cuda.tile._ir.ir import Operation
-from cuda.tile._ir.ops import Loop, UnaryOpOperation, IfElse, TileExtract
+from cuda.tile._ir.ops import Loop, Unary, IfElse, TileExtract
 from cuda.tile._compiler_options import CompilerOptions
 from cuda.tile._compile import compile_tile
 
@@ -37,15 +37,15 @@ def _find_nested_loops(block, hoisted_op) -> List[Loop]:
     return ret
 
 
-def _find_sqrt(block) -> UnaryOpOperation:
+def _find_sqrt(block) -> Unary:
     sqrt_ops = _find_sqrt_ops(block)
     assert len(sqrt_ops) == 1
     return sqrt_ops[0]
 
 
-def _find_sqrt_ops(block) -> List[UnaryOpOperation]:
+def _find_sqrt_ops(block) -> List[Unary]:
     return [op for op in block.traverse()
-            if isinstance(op, UnaryOpOperation) and op.fn == "sqrt"]
+            if isinstance(op, Unary) and op.fn == "sqrt"]
 
 
 def _find_loop_with_extract(block) -> Loop:

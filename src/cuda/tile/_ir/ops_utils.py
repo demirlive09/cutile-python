@@ -89,7 +89,7 @@ UNARYOP_REGISTRY = {
                       (RoundingMode.RN, RoundingMode.RZ, RoundingMode.RM, RoundingMode.RP,
                        RoundingMode.APPROX),
                       support_flush_to_zero=True),
-    "rsqrt": MathOpDef(lambda x: 1.0 / math.sqrt(x), (), support_flush_to_zero=True),
+    "rsqrt": MathOpDef(lambda x: x ** -0.5, (), support_flush_to_zero=True),
     "invert": MathOpDef(lambda x: ~x),
     "not_": MathOpDef(lambda x: not x),
     "floor": MathOpDef(math.floor),

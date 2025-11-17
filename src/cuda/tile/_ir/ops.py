@@ -6,7 +6,7 @@ import math
 import operator
 import types
 from dataclasses import dataclass
-from typing import Sequence, Tuple, Optional, Union, Any, List, Iterator
+from typing import Sequence, Tuple, Optional, Union, Any, List, Iterator, Callable
 
 from typing_extensions import override
 
@@ -50,7 +50,7 @@ from .type import (
     UNDEFINED, NONE, ModuleTy, TypeTy
 )
 from cuda.tile._datatype import DType, BroadcastError, broadcast_shapes2, \
-    is_shape_broadcastable_to, is_integral, is_float, is_signed
+    is_shape_broadcastable_to, is_integral, is_float, is_signed, is_boolean, is_restricted_float
 from cuda.tile._ir2bytecode import (
     lower_reduce,
     lower_reduce_argmax_argmin, lower_scan,
@@ -1292,7 +1292,7 @@ def build_tuple(items: tuple[Var], block: Block, loc: Loc, res: Var) -> None:
     block.append(build_tuple_op)
 
 
-class UnaryOpOperation(Operation):
+class Unary(TypedOperation):
     def __init__(self, fn: str, operand: Var,
                  rounding_mode: Optional[RoundingMode], flush_to_zero: bool,
                  result_var: Var, loc: Loc):
@@ -1307,34 +1307,16 @@ class UnaryOpOperation(Operation):
                          loc=loc)
 
     @override
-    def infer_type(self, typing_context: TypingContext) -> TypeResult:
-        x_type = typing_context.get_type(self.operand)
-        if isinstance(x_type, TileTy):
-            x_dtype = x_type.dtype
-        elif isinstance(x_type, DType):
-            x_dtype = x_type
-        else:
-            raise TileTypeError(f'Expect a tile or scalar, got {x_type}')
-        if self.fn == 'invert':
-            if not (datatype.is_integral(x_dtype) or datatype.is_boolean(x_dtype)):
-                raise TileTypeError(f'Expect int or boolean dtype, got {x_dtype}')
-        if self.fn in ["floor", "ceil"]:
-            if not datatype.is_float(x_dtype):
-                raise TileTypeError(f'Expect float dtype, got {x_dtype}')
-        check_rd_and_ftz(self.fn, self.rounding_mode, self.flush_to_zero, x_dtype)
-        return x_type
-
-    @override
     def generate_bytecode(self, ctx: BytecodeContext) -> bc.Value:
         x = ctx.get_value(self.operand)
         rounding_mode = rounding_mode_to_bytecode[self.rounding_mode]
         flush_to_zero = self.flush_to_zero
         input_type = ctx.typeof(self.operand)
         input_dtype = get_dtype(input_type)
-        is_float = datatype.is_float(input_dtype)
+        flt = is_float(input_dtype) or is_restricted_float(input_dtype)
         res_type_id = ctx.typeid_of(self.result_var)
 
-        match self.fn, is_float:
+        match self.fn, flt:
             case "abs", True: return bc.encode_AbsFOp(ctx.builder, res_type_id, x)
             case "abs", False: return bc.encode_AbsIOp(ctx.builder, res_type_id, x)
             case "neg", True: return bc.encode_NegFOp(ctx.builder, res_type_id, x)
@@ -1366,51 +1348,118 @@ class UnaryOpOperation(Operation):
             case _:
                 raise NotImplementedError(f"Missing implementation for unary op: {self.fn}")
 
-    @override
-    def fold_constant(self, typing_context: TypingContext):
-        const_val = typing_context.get_constant(self.operand)
-        if self.fn in UNARYOP_REGISTRY:
-            return UNARYOP_REGISTRY[self.fn].impl(const_val)
-        raise ConstFoldNotImplementedError()
+
+def _unary_promote_to_int(x):
+    return astype(x, datatype.default_int_type)
 
 
-@impl(ct.log, fixed_args=["log"])
-@impl(ct.log2, fixed_args=["log2"])
-@impl(ct.tan, fixed_args=["tan"])
-@impl(ct.tanh, fixed_args=["tanh"])
-@impl(ct.sin, fixed_args=["sin"])
-@impl(ct.sinh, fixed_args=["sinh"])
-@impl(ct.cos, fixed_args=["cos"])
-@impl(ct.cosh, fixed_args=["cosh"])
-@impl(ct.exp, fixed_args=["exp"])
-@impl(ct.bitwise_not, fixed_args=["invert"])
-@impl(ct.floor, fixed_args=["floor"])
-@impl(ct.ceil, fixed_args=["ceil"])
-@impl(ct.negative, fixed_args=["neg"])
-@impl(abs, fixed_args=["abs"])
-@impl(operator.invert, fixed_args=["invert"])
-@impl(operator.not_, fixed_args=["not_"])
-@impl(operator.pos, fixed_args=["pos"])
-@impl(operator.neg, fixed_args=["neg"])
-def unaryop(fn: str, x: Var) -> Var:
-    return add_operation(UnaryOpOperation, None, fn=fn, operand=x,
+def _unary_promote_to_float(x):
+    return astype(x, datatype.default_float_type)
+
+
+def _unary_preserve(x):
+    return x
+
+
+@dataclass
+class _UnaryBehavior:
+    bool_handler: Optional[Callable[[Var], Var]]
+    int_handler: Optional[Callable[[Var], Var]]
+    float_handler: Optional[Callable[[Var], Var]]
+
+
+def unary(fn: str, behavior: _UnaryBehavior, x: Var,
+          rounding_mode: Optional[RoundingMode] = None, flush_to_zero: bool = False) -> Var:
+    x_type = require_tile_or_scalar_type(x)
+    input_dtype = get_dtype(x_type)
+
+    if x.is_constant():
+        return typed_const(UNARYOP_REGISTRY[fn].impl(x.get_constant()))
+
+    if is_boolean(input_dtype):
+        if behavior.bool_handler is None:
+            raise TileTypeError("Boolean inputs are not supported")
+        x = behavior.bool_handler(x)
+    elif is_integral(input_dtype):
+        if behavior.int_handler is None:
+            raise TileTypeError("Integer inputs are not supported")
+        x = behavior.int_handler(x)
+    elif is_float(input_dtype) or is_restricted_float(input_dtype):
+        if behavior.float_handler is None:
+            raise TileTypeError("Float inputs are not supported")
+        x = behavior.float_handler(x)
+    else:
+        raise TileTypeError(f"Unexpected input dtype {input_dtype}")
+
+    ty = x.get_type()
+    check_rd_and_ftz(fn, rounding_mode, flush_to_zero, get_dtype(ty))
+    return add_operation(Unary, ty, fn=fn, operand=x,
+                         rounding_mode=rounding_mode, flush_to_zero=flush_to_zero)
+
+
+_UNARY_FLOAT = _UnaryBehavior(_unary_promote_to_float, _unary_promote_to_float, _unary_preserve)
+_UNARY_STRICT_FLOAT = _UnaryBehavior(None, None, _unary_preserve)
+_UNARY_INT_FLOAT = _UnaryBehavior(_unary_promote_to_int, _unary_preserve, _unary_preserve)
+_UNARY_BOOL_INT = _UnaryBehavior(_unary_preserve, _unary_preserve, None)
+_UNARY_ANYTHING = _UnaryBehavior(_unary_preserve, _unary_preserve, _unary_preserve)
+
+
+@impl(operator.not_)
+def logical_not_impl(x: Var) -> Var:
+    if x.is_constant():
+        return typed_const(not x.get_constant())
+
+    require_scalar_or_0d_tile_type(x)
+    x = astype(x, datatype.bool_)
+    return add_operation(Unary, x.get_type(), fn="invert", operand=x,
                          rounding_mode=None, flush_to_zero=False)
 
 
-@impl(ct.rsqrt, fixed_args=["rsqrt"])
-@impl(ct.exp2, fixed_args=["exp2"])
-def unaryop_with_ftz(fn: str, x: Var, flush_to_zero: Var) -> Var:
+@impl(operator.pos)
+def pos_impl(x: Var):
+    if x.is_constant():
+        return typed_const(+x.get_constant())
+
+    ty = require_tile_or_scalar_type(x)
+    if get_dtype(ty) == datatype.bool_:
+        return astype(x, datatype.default_int_type)
+    else:
+        return x
+
+
+@impl(ct.log, fixed_args=["log", _UNARY_FLOAT])
+@impl(ct.log2, fixed_args=["log2", _UNARY_FLOAT])
+@impl(ct.tan, fixed_args=["tan", _UNARY_FLOAT])
+@impl(ct.tanh, fixed_args=["tanh", _UNARY_FLOAT])
+@impl(ct.sin, fixed_args=["sin", _UNARY_FLOAT])
+@impl(ct.sinh, fixed_args=["sinh", _UNARY_FLOAT])
+@impl(ct.cos, fixed_args=["cos", _UNARY_FLOAT])
+@impl(ct.cosh, fixed_args=["cosh", _UNARY_FLOAT])
+@impl(ct.exp, fixed_args=["exp", _UNARY_FLOAT])
+@impl(ct.bitwise_not, fixed_args=["invert", _UNARY_BOOL_INT])
+@impl(ct.floor, fixed_args=["floor", _UNARY_STRICT_FLOAT])
+@impl(ct.ceil, fixed_args=["ceil", _UNARY_STRICT_FLOAT])
+@impl(ct.negative, fixed_args=["neg", _UNARY_INT_FLOAT])
+@impl(abs, fixed_args=["abs", _UNARY_ANYTHING])
+@impl(operator.invert, fixed_args=["invert", _UNARY_BOOL_INT])
+@impl(operator.neg, fixed_args=["neg", _UNARY_INT_FLOAT])
+def unary_impl(fn: str, behavior: _UnaryBehavior, x: Var) -> Var:
+    return unary(fn, behavior, x)
+
+
+@impl(ct.rsqrt, fixed_args=["rsqrt", _UNARY_FLOAT])
+@impl(ct.exp2, fixed_args=["exp2", _UNARY_FLOAT])
+def unary_impl_with_ftz(fn: str, behavior: _UnaryBehavior, x: Var, flush_to_zero: Var) -> Var:
     flush_to_zero = require_constant_bool(flush_to_zero)
-    return add_operation(UnaryOpOperation, None, fn=fn, operand=x,
-                         rounding_mode=None, flush_to_zero=flush_to_zero)
+    return unary(fn, behavior, x, flush_to_zero=flush_to_zero)
 
 
-@impl(ct.sqrt, fixed_args=["sqrt"])
-def unaryop_with_rd_and_ftz(fn: str, x: Var, rounding_mode: Var, flush_to_zero: Var) -> Var:
+@impl(ct.sqrt, fixed_args=["sqrt", _UNARY_FLOAT])
+def unary_impl_with_rd_and_ftz(fn: str, behavior: _UnaryBehavior,
+                               x: Var, rounding_mode: Var, flush_to_zero: Var) -> Var:
     rounding_mode = require_optional_constant_enum(rounding_mode, RoundingMode)
     flush_to_zero = require_constant_bool(flush_to_zero)
-    return add_operation(UnaryOpOperation, None, fn=fn, operand=x,
-                         rounding_mode=rounding_mode, flush_to_zero=flush_to_zero)
+    return unary(fn, behavior, x, rounding_mode=rounding_mode, flush_to_zero=flush_to_zero)
 
 
 @impl(getattr)
