@@ -24,7 +24,7 @@ from .typing_support import typeof_pyval, get_constant_value
 from cuda.tile._exception import (
     TileTypeError,
     TileValueError,
-    ConstFoldNotImplementedError, Loc, TileInternalError
+    Loc, TileInternalError
 )
 
 if TYPE_CHECKING:
@@ -346,9 +346,6 @@ class Operation:
     @parent_block.setter
     def parent_block(self, block: Block):
         self._parent_block = block
-
-    def fold_constant(self, typing_context: "TypingContext") -> Any:
-        raise ConstFoldNotImplementedError()
 
     def infer_type(self, typing_context: "TypingContext") -> TypeResult:
         raise NotImplementedError(f"Operation {self.op} must implement infer_type")

@@ -82,6 +82,7 @@ BUILTIN_FUNCS = {
     max: lambda x, y, /: None,
     min: lambda x, y, /: None,
     range: lambda *args: None,
+    slice: lambda start, stop, step: None,
     operator.add: lambda x, y, /: None,
     operator.sub: lambda x, y, /: None,
     operator.mul: lambda x, y, /: None,

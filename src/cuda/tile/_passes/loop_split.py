@@ -7,8 +7,8 @@ from typing import Optional, Set, Dict, DefaultDict, Mapping, NamedTuple, Sequen
 
 from cuda.tile._ir.ir import Block, Var, Mapper, IRContext
 from cuda.tile._ir.ops import (Loop, IfElse, RawBinaryArithmeticOperation, RawComparisonOperation,
-                               Assign, Const, UnpackRange, Range, EndBranch, Continue, ForLoopInfo,
-                               CarriedVariables)
+                               Assign, UnpackRange, Range, EndBranch, Continue, ForLoopInfo,
+                               CarriedVariables, TypedConst)
 
 
 class _Condition(NamedTuple):
@@ -99,7 +99,7 @@ def _split_loop(loop: Loop, cond: _Condition, if_ops_to_flatten: Set[IfElse], ne
     loc = loop.loc
     if _NEED_TO_ADJUST_RANGE[cond.cmp]:
         one_var = new_block.make_temp_var(loc)
-        new_block.append(Const(1, one_var, loc, dtype=range_dtype))
+        new_block.append(TypedConst(1, one_var, loc))
         typemap[one_var.name] = range_dtype
         plus_one_var = new_block.make_temp_var(loc)
         new_block.append(RawBinaryArithmeticOperation("add", split_value, one_var, None, False,

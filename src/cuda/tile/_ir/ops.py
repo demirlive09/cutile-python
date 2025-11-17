@@ -550,42 +550,18 @@ class Const(Operation):
         value: Any,
         result_var: Var,
         loc: Loc,
-        dtype: Optional[DType] = None,
     ):
         super().__init__(
             "const",
             operands={},
             result_vars=[result_var],
-            attributes={"value": value, "dtype": dtype},
+            attributes={"value": value},
             loc=loc,
         )
 
-    @override
-    def infer_type(self, typing_context: TypingContext) -> TypeResult:
-        if self.dtype is None:
-            return typeof_pyval(self.value)
-        _check_value_numeric_type(self.value, self.dtype)
-        return self.dtype
 
-    @override
-    def fold_constant(self, typing_context: TypingContext) -> List[Any] | Any:
-        return self.value
-
-    @override
-    def generate_bytecode(self, ctx: BytecodeContext) -> list[tuple[bc.Value, ...]]:
-        try:
-            return [ctx.constant_tuple(self.value, ctx.typeof(self.result_var))]
-        except ConstFoldNotImplementedError:
-            # FIXME: this is a workaround. Ideally, we should remove these Const ops
-            #        with DCE. But this will only be possible when we move parameters
-            #        like `order` (which is a string) from operands to attributes.
-            return [()]
-
-
-def const(value: Any, block: Block, loc: Loc, res: Var,
-          dtype: Optional[DType] = None) -> None:
-    const_op = Const(value, res, loc, dtype=dtype)
-    block.append(const_op)
+def const(value: Any, block: Block, loc: Loc, res: Var) -> None:
+    block.append(Const(value, res, loc))
 
 
 class TypedConst(TypedOperation):
@@ -1003,28 +979,11 @@ def mod(x: Var, y: Var) -> Var:
     return where(need_fix, fixed_value, value)
 
 
-class Slice(Operation):
-    def __init__(self, lower: Var, upper: Var, step: Var, result_var: Var, loc: Loc):
-        super().__init__("slice",
-                         operands={"lower": lower, "upper": upper, "step": step},
-                         result_vars=[result_var],
-                         loc=loc)
-
-    @override
-    def infer_type(self, typing_context: TypingContext) -> TypeResult:
-        raise TileTypeError("slice must be constant")
-
-    @override
-    def fold_constant(self, typing_context: TypingContext) -> slice:
-        lower = typing_context.get_constant(self.lower)
-        upper = typing_context.get_constant(self.upper)
-        step = typing_context.get_constant(self.step)
-        return slice(lower, upper, step)
-
-
-def slice_(lower: Var, upper: Var, step: Var, block: Block, loc: Loc, result_var: Var):
-    op = Slice(lower, upper, step, result_var, loc)
-    block.append(op)
+@impl(slice)
+def slice_impl(start: Var, stop: Var, step: Var) -> Var:
+    if not (start.is_constant() and stop.is_constant() and step.is_constant()):
+        raise TileTypeError("Non-constant slices are not supported")
+    return typed_const(slice(start.get_constant(), stop.get_constant(), step.get_constant()))
 
 
 class TupleItemOperation(TypedOperation):
@@ -1558,10 +1517,6 @@ class GetBoundSelf(TypedOperation):
     def __init__(self, bound_method: Var, result_var: Var, loc: Loc):
         super().__init__("get_bound_self", operands={"bound_method": bound_method},
                          result_vars=[result_var], loc=loc)
-
-    @override
-    def infer_type(self, typing_context: TypingContext) -> TypeResult:
-        return typing_context.get_type(self.bound_method).self_ty
 
     @override
     def generate_bytecode(self, ctx: BytecodeContext):

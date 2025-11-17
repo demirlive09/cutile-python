@@ -13,13 +13,13 @@ from typing import Tuple, Any, Optional, Sequence, Callable
 from cuda.tile._debug import CUDA_TILE_LOGS
 from cuda.tile._exception import (
     TileTypeError,
-    TileInternalError, ConstFoldNotImplementedError,
+    TileInternalError,
     ConstantNotFoundError, TileSyntaxError, Loc, TileError
 )
 from cuda.tile._ir import ir
 from cuda.tile._ir.ir import Operation, Function, Block, Var, Argument, IRContext, TypedOperation
 from cuda.tile._ir.op_impl import op_implementations
-from cuda.tile._ir.typing_support import typeof_pyval, get_signature
+from cuda.tile._ir.typing_support import get_signature
 from cuda.tile._ir.type import FunctionTy, BoundMethodTy, DTypeConstructor, Type, UNDEFINED
 
 
@@ -114,34 +114,6 @@ def propagate_type(context: TypingContext, name: str, typ: Type) -> None:
         # TODO: better error message to show the variable location.
         raise TypeError(f"Types mismatch for {name} in propagation: "
                         f"{context.typemap[name]} != {typ}")
-
-
-def infer_constant(op: Operation, context: TypingContext) -> bool:
-    const_results = None
-    try:
-        const_results = op.fold_constant(typing_context=context)
-    except (ConstFoldNotImplementedError, ConstantNotFoundError):
-        pass
-    except Exception as e:
-        raise TileTypeError(str(e))
-    else:
-        if len(op.result_vars) == 1:
-            const_results = [const_results]
-        if len(const_results) != len(op.result_vars):
-            raise TileInternalError(f"Number of results mismatch: "
-                                    f"{len(const_results)} != {len(op.result_vars)}", op.loc)
-        for res_var, res_val in zip(op.result_vars, const_results):
-            try:
-                # TODO: we are using typeof_pyval to get the type of the folded constant
-                # which may not be enough when the fold_constant
-                # computes a np.float64 and pyval can treat it as a default float type
-                res_type = typeof_pyval(res_val)
-            except TypeError as e:
-                raise TileTypeError(str(e))
-            context.set_type(res_var, res_type)
-            context.set_constant(res_var, res_val)
-
-    return const_results is not None
 
 
 def infer_type(op: Operation, context: TypingContext) -> None:
@@ -241,61 +213,64 @@ def _check_recursive_call(call_loc: Loc, callee: Callable):
         call_loc = call_loc.call_site
 
 
-def _replace_call(block: Block, idx: int):
-    from cuda.tile._ir.ops import assign, typed_const, get_bound_self
+def _replace_call_or_const(block: Block, idx: int):
+    from cuda.tile._ir.ops import assign, typed_const, get_bound_self, Const
 
     op = block[idx]
 
     remap_result = True
     with ir.Builder(block.ctx, op.loc) as ir_builder:
-        args = []
-        ty = op.func.get_type()
-        if isinstance(ty, FunctionTy):
-            callee = ty.func
-        elif isinstance(ty, BoundMethodTy):
-            callee = ty.func
-            args.append(get_bound_self(op.func))
-        elif isinstance(ty, DTypeConstructor):
-            callee = ty.dtype
+        if isinstance(op, Const):
+            result = typed_const(op.value)
         else:
-            raise TileTypeError(f"Cannot call an object of type {ty}")
+            args = []
+            ty = op.func.get_type()
+            if isinstance(ty, FunctionTy):
+                callee = ty.func
+            elif isinstance(ty, BoundMethodTy):
+                callee = ty.func
+                args.append(get_bound_self(op.func))
+            elif isinstance(ty, DTypeConstructor):
+                callee = ty.dtype
+            else:
+                raise TileTypeError(f"Cannot call an object of type {ty}")
 
-        args.extend(op.args)
-        arg_list = _bind_args(callee, args, op.kwarg_dict())
+            args.extend(op.args)
+            arg_list = _bind_args(callee, args, op.kwarg_dict())
 
-        if callee in op_implementations:
-            result = op_implementations[callee](*arg_list)
-            if result is None:
-                result = typed_const(None)
-            assert isinstance(result, Var)
+            if callee in op_implementations:
+                result = op_implementations[callee](*arg_list)
+                if result is None:
+                    result = typed_const(None)
+                assert isinstance(result, Var)
 
-            if all(result.name != r.name
-                   for new_op in ir_builder.ops for r in new_op.result_vars):
-                # If the returned result variable is not produced by any of
-                # the newly created operations, insert an Assign op.
-                #
-                # This mainly happens when an operation implementation reduces to a no-op
-                # by returning its input. For example, reshape(x, new_shape) may return `x`
-                # when the new shape is the same as the old one. So we need to replace
-                # `y = reshape(x, new_shape)` with `y = assign(x)` to make sure `y` is defined.
-                assign(result, op.result_var)
-                remap_result = False
-        else:
-            # Callee is a user-defined function.
-            from cuda.tile._ast2ir import get_function_ir
-            _check_recursive_call(op.loc, callee)
+                if all(result.name != r.name
+                       for new_op in ir_builder.ops for r in new_op.result_vars):
+                    # If the returned result variable is not produced by any of
+                    # the newly created operations, insert an Assign op.
+                    #
+                    # This mainly happens when an operation implementation reduces to a no-op
+                    # by returning its input. For example, reshape(x, new_shape) may return `x`
+                    # when the new shape is the same as the old one. So we need to replace
+                    # `y = reshape(x, new_shape)` with `y = assign(x)` to make sure `y` is defined.
+                    assign(result, op.result_var)
+                    remap_result = False
+            else:
+                # Callee is a user-defined function.
+                from cuda.tile._ast2ir import get_function_ir
+                _check_recursive_call(op.loc, callee)
 
-            sig = get_signature(callee)
-            for param_name, param in sig.parameters.items():
-                if param.kind in (inspect.Parameter.VAR_POSITIONAL,
-                                  inspect.Parameter.VAR_KEYWORD):
-                    raise TileSyntaxError("Variadic parameters in user-defined"
-                                          " functions are not supported")
-            callee_function_ir = get_function_ir(callee, block.ctx, call_site=op.loc)
-            for arg, param in zip(arg_list, callee_function_ir.parameters):
-                assign(arg, param)
-            ir_builder.extend_verbatim(callee_function_ir.root_block.detach_all())
-            result = callee_function_ir.return_value
+                sig = get_signature(callee)
+                for param_name, param in sig.parameters.items():
+                    if param.kind in (inspect.Parameter.VAR_POSITIONAL,
+                                      inspect.Parameter.VAR_KEYWORD):
+                        raise TileSyntaxError("Variadic parameters in user-defined"
+                                              " functions are not supported")
+                callee_function_ir = get_function_ir(callee, block.ctx, call_site=op.loc)
+                for arg, param in zip(arg_list, callee_function_ir.parameters):
+                    assign(arg, param)
+                ir_builder.extend_verbatim(callee_function_ir.root_block.detach_all())
+                result = callee_function_ir.return_value
 
     new_ops = ir_builder.ops
     if remap_result:
@@ -318,29 +293,11 @@ def infer_types_for_op(context: TypingContext, block: Block, i: int) -> int:
         _flatten_if_else(block, i)
         return 0
 
-    if isinstance(op, Call):
-        _replace_call(block, i)
+    if isinstance(op, Call | Const):
+        _replace_call_or_const(block, i)
         return 0
 
-    if isinstance(op, Const):
-        context.constants[op.result_var.name] = op.value
-        if op.dtype is None:
-            try:
-                type = typeof_pyval(op.value)
-            except TypeError as e:
-                raise TileTypeError(str(e), op.loc)
-        else:
-            type = op.dtype
-        context.set_type(op.result_var, type)
-    elif infer_constant(op, context):
-        if len(op.result_vars) == 1 and \
-                op.result_var.name in context.constants and \
-                not isinstance(op, Const):
-            const_val = context.constants[op.result_var.name]
-            block[i] = Const(const_val, op.result_var, op.loc)
-    else:
-        infer_type(op, context)
-
+    infer_type(op, context)
     return 1
 
 

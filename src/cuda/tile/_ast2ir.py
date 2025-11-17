@@ -300,8 +300,12 @@ def _slice_stmt(slice_: ast.Slice, block: ir.Block, ctx: _Context) -> ir.Var:
         return _expr(x, block, ctx)
 
     lower, upper, step = map(get_var, (slice_.lower, slice_.upper, slice_.step))
+
+    func_var = block.make_temp_var(loc)
+    ops.const(slice, block, loc, func_var)
+
     res = block.make_temp_var(loc)
-    ops.slice_(lower, upper, step, block, loc, res)
+    ops.call(func_var, (lower, upper, step), (), block, loc, res)
     return res
 
 
