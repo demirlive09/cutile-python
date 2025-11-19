@@ -12,7 +12,6 @@ from torch.testing import make_tensor
 import cuda.tile as ct
 from util import assert_close, assert_equal
 from cuda.tile._exception import TileTypeError
-from cuda.tile import _datatype as datatype
 from conftest import float_dtypes, int_dtypes, bool_dtypes, dtype_id
 
 
@@ -64,34 +63,25 @@ def kernel_astype_tf32(x, y, TILE: ct.Constant[int]):
     ct.store(y, index=(bid,), tile=ty)
 
 
-def test_cast_tf32():
+@pytest.mark.parametrize("dtype", [torch.float16,
+                                   torch.float32,
+                                   torch.bfloat16,
+                                   torch.float64])
+def test_cast_tf32(dtype):
     # Test that tf32 is casted to float32
-    x = make_tensor((32, 32), dtype=torch.float32, device='cuda')
+    x = make_tensor((32, 32), dtype=dtype, device='cuda')
     y = torch.zeros_like(x)
 
     # emulate TF32 cast in PyTorch by performing a matmul with diag(ones) in TF32 precision
-    dummy = torch.eye(32, dtype=torch.float32, device='cuda')
+    dummy = torch.eye(32, dtype=dtype, device='cuda')
     torch.set_float32_matmul_precision("high")
     ref = torch.matmul(x, dummy).view(-1)
     torch.set_float32_matmul_precision("highest")
-
     x = x.view(-1)
     y = y.view(-1)
-
     grid = (ceil(x.numel() / 32), 1)
     ct.launch(torch.cuda.current_stream(), grid, kernel_astype_tf32, (x, y, 32))
     assert_close(y, ref, atol=1e-6, rtol=1e-3)
-
-
-@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float64])
-def test_cast_tf32_fail(dtype):
-    # Test that tf32 is not casted to float64
-    x = make_tensor(512, dtype=dtype, device='cuda')
-    y = torch.zeros_like(x, dtype=dtype)
-
-    grid = (ceil(x.numel() / 128), 1, 1)
-    with pytest.raises(TileTypeError):
-        ct.launch(torch.cuda.current_stream(), grid, kernel_astype_tf32, (x, y, 128))
 
 
 @pytest.mark.parametrize("dtype_x, dtype_y", [
@@ -177,9 +167,5 @@ def test_array_astype(shape, tile, from_dtype, to_dtype):
     grid = (ceil(x.numel() / tile), 1, 1)
 
     array_astype = make_array_astype_kernel(to_dtype)
-    if datatype.can_cast_dtypes(from_dtype, to_dtype):
-        ct.launch(torch.cuda.current_stream(), grid, array_astype, (x, y, tile))
-        assert_equal(y, x.to(y.dtype))
-    else:
-        with pytest.raises(TileTypeError, match=f"Cannot cast {from_dtype} to {to_dtype}"):
-            ct.launch(torch.cuda.current_stream(), grid, array_astype, (x, y, tile))
+    ct.launch(torch.cuda.current_stream(), grid, array_astype, (x, y, tile))
+    assert_equal(y, x.to(y.dtype))

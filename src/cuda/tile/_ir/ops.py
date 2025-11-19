@@ -2544,14 +2544,9 @@ def mma(x: Var, y: Var, acc: Var) -> Var:
     x_shape, y_shape, _, output_shape = _matmul_broadcast_shape(x_shape_orig, y_shape_orig)
     if acc_shape_orig != output_shape:
         raise TileTypeError(f'Expect acc shape to be {output_shape}, got {acc_shape_orig}')
-    common_dtype = datatype.promote_dtypes(x_tile_type.dtype, y_tile_type.dtype)
-    allowed_acc_dtype = datatype.mma_supported_result_dtype(common_dtype)
-    acc_dtype = acc_tile_type.dtype
-    if acc_dtype not in allowed_acc_dtype:
-        raise TileTypeError(f'Expect acc dtype to be in {allowed_acc_dtype}, got {acc_dtype}')
-
-    x = _promote_and_broadcast_to(x, TileTy(common_dtype, x_shape))
-    y = _promote_and_broadcast_to(y, TileTy(common_dtype, y_shape))
+    datatype._resolve_mma_supported_dtype(x_tile_type.dtype, y_tile_type.dtype, acc_tile_type.dtype)
+    x = _promote_and_broadcast_to(x, TileTy(x_tile_type.dtype, x_shape))
+    y = _promote_and_broadcast_to(y, TileTy(y_tile_type.dtype, y_shape))
     return add_operation(TileMma, acc_tile_type, x=x, y=y, acc=acc)
 
 
@@ -2564,7 +2559,7 @@ def matmul(x: Var, y: Var) -> Var:
     y_shape_orig = y_tile_type.shape
     x_shape, y_shape, acc_shape, output_shape = _matmul_broadcast_shape(x_shape_orig, y_shape_orig)
     common_dtype = datatype.promote_dtypes(x_tile_type.dtype, y_tile_type.dtype)
-    acc_dtype = datatype.default_mma_result_dtype(common_dtype)
+    acc_dtype = datatype._resolve_mma_supported_dtype(common_dtype, common_dtype, None)
     x = _promote_and_broadcast_to(x, TileTy(common_dtype, x_shape))
     if len(y_shape_orig) == 1:
         # When y is 1d, we cannot directly use cast for reshape + broadcast
@@ -2577,7 +2572,9 @@ def matmul(x: Var, y: Var) -> Var:
     acc_ty = TileTy(acc_dtype, acc_shape)
     acc_value = typed_const(0, acc_ty)
     matmul_result = add_operation(TileMma, acc_ty, x=x, y=y, acc=acc_value)
-    return reshape(matmul_result, tuple(dim.value for dim in output_shape))
+    matmul_result = astype(matmul_result, common_dtype)
+    ret = reshape(matmul_result, tuple(dim.value for dim in output_shape))
+    return ret
 
 
 class TileReduce(TypedOperation):
@@ -3017,12 +3014,8 @@ class TileAsType(TypedOperation):
 def astype(x: Var, dtype: DType) -> Var:
     x_ty = require_tile_or_scalar_type(x)
     from_dtype = get_dtype(x_ty)
-    if not datatype.can_cast_dtypes(from_dtype, dtype):
-        raise TileTypeError(f"Cannot cast {from_dtype} to {dtype}")
-
     if from_dtype == dtype:
         return x
-
     result_ty = dtype if isinstance(x_ty, DType) else make_tile_ty(dtype, x_ty.shape_value)
     return add_operation(TileAsType, result_ty, x=x)
 

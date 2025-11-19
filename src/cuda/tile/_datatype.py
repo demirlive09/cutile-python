@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import itertools
-from typing import Set, Optional, Any, Callable, Tuple, Sequence
+from typing import Optional, Any, Callable, Tuple, Sequence
 from enum import IntEnum
 
 from cuda.tile._exception import TileTypeError
@@ -481,57 +481,37 @@ def can_autocast_dtypes(from_d: DType, to_d: DType) -> bool:
         return k1 < k2
 
 
-def can_cast_dtypes(from_d: DType, to_d: DType) -> bool:
-    if from_d == to_d:
-        return True
-
-    # TODO: check if these restrictions too strict
-    # at least for now, TF32 only seems to work via FP32
-    if is_restricted_arithmetic(from_d) and is_restricted_arithmetic(to_d):
-        return False
-    elif is_restricted_arithmetic(from_d):
-        return to_d == float32
-    elif is_restricted_arithmetic(to_d):
-        return from_d == float32
-
-    # all other type combinations (not involving restricted types) should be castable
-    return True
+_mma_supported_dtypes = {
+    float8_e4m3fn: (float16, float32),
+    float8_e5m2: (float16, float32),
+    float16: (float16, float32),
+    bfloat16: (float32,),
+    float32: (float32,),
+    tfloat32: (float32,),
+    float64: (float64,),
+    int8: (int32,),
+    uint8: (int32,),
+}
 
 
-def default_mma_result_dtype(input_dtype: DType) -> DType:
-    if input_dtype == float16:
-        return float16
-    elif input_dtype == float32:
-        return float32
-    elif input_dtype == bfloat16:
-        return float32
-    elif input_dtype == tfloat32:
-        return float32
-    elif input_dtype == float64:
-        return float64
-    elif input_dtype == int8:
-        return int32
-    elif input_dtype in [float8_e4m3fn, float8_e5m2]:
-        return float32
-    raise TypeError(f'Unsupported dtype for mma: {input_dtype}')
-
-
-def mma_supported_result_dtype(input_dtype: DType) -> Set[DType]:
-    if input_dtype == float16:
-        return {float16, float32}
-    elif input_dtype == float32:
-        return {float32}
-    elif input_dtype == bfloat16:
-        return {float32}
-    elif input_dtype == float64:
-        return {float64}
-    elif input_dtype == tfloat32:
-        return {float32}
-    elif input_dtype == int8:
-        return {int32}
-    elif input_dtype in [float8_e4m3fn, float8_e5m2]:
-        return {float16, float32}
-    raise TypeError(f'Unsupported dtype for mma: {input_dtype}')
+def _resolve_mma_supported_dtype(x_dtype: DType,
+                                 y_dtype: DType,
+                                 acc_dtype: Optional[DType] = None) -> DType:
+    if x_dtype != y_dtype and (x_dtype not in (int8, uint8) or y_dtype not in (int8, uint8)):
+        raise TileTypeError(f"x and y must have the same dtype unless they are int8/uint8, "
+                            f"got {x_dtype} {y_dtype}")
+    if x_dtype not in _mma_supported_dtypes:
+        candidates = ",".join(str(x) for x in _mma_supported_dtypes.keys())
+        raise TileTypeError(f"Unsupported input dtype {x_dtype}, "
+                            f"supported dtypes are {candidates}")
+    if acc_dtype is not None:
+        candidates = _mma_supported_dtypes[x_dtype]
+        if acc_dtype not in candidates:
+            raise TileTypeError(f"Unsupported acc dtype {acc_dtype}, "
+                                f"supported dtypes are {candidates}")
+    else:
+        acc_dtype = _mma_supported_dtypes[x_dtype][0]
+    return acc_dtype
 
 
 # =============== Documentation Generator ================

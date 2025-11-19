@@ -12,6 +12,8 @@ import math
 
 def dtype_id(dtype):
     match(dtype):
+        case torch.float8_e4m3fn: return "f8e4m3fn"
+        case torch.float8_e5m2: return "f8e5m2"
         case torch.float16: return "f16"
         case torch.bfloat16: return "bf16"
         case torch.float32: return "f32"

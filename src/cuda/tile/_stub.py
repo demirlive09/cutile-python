@@ -893,11 +893,33 @@ def mma(x, y, /, acc) -> Tile:
     """Perform matrix multiply and accumulate on tile
 
     Args:
-        x (Tile): LHS of the mma
-        y (Tile): RHS of the mma
+        x (Tile): LHS of the mma, 2D or 3D
+        y (Tile): RHS of the mma, 2D or 3D
         acc (Tile): Accumulator of mma
 
-    If `x` and `y` have different dtype, they will be promoted to common dtype.
+    Supported datatypes:
+
+    +----------+---------------+
+    | Input    |  Acc/Ouput    |
+    +==========+===============+
+    | f16      |  f16 or f32   |
+    +----------+---------------+
+    | bf16     |  f32          |
+    +----------+---------------+
+    | f32      |  f32          |
+    +----------+---------------+
+    | f64      |  f64          |
+    +----------+---------------+
+    | tf32     |  f32          |
+    +----------+---------------+
+    | f8e4m3fn |  f16 or f32   |
+    +----------+---------------+
+    | f8e5m2   |  f16 or f32   |
+    +----------+---------------+
+    | [u|i]8   |  i32          |
+    +----------+---------------+
+
+    If `x` and `y` have different dtype, they will NOT be promoted to common dtype.
     Shape of `x` and `y` will be broadcasted to up until the last two axes.
 
     Returns:
@@ -905,9 +927,9 @@ def mma(x, y, /, acc) -> Tile:
 
     Example:
 
-        >>> tx = ct.full((2, 4), 3, dtype=np.float32)
-        >>> ty = ct.full((4, 8), 4, dtype=np.float32)
-        >>> acc = ct.full((2, 8), 0, dtype=np.float32)
+        >>> tx = ct.full((2, 4), 3, dtype=ct.float32)
+        >>> ty = ct.full((4, 8), 4, dtype=ct.float32)
+        >>> acc = ct.full((2, 8), 0, dtype=ct.float32)
         # default
         >>> tz = ct.mma(tx, ty, acc)
     """
@@ -918,10 +940,13 @@ def matmul(x, y, /) -> Tile:
     """Perform matrix multiply on tile
 
     Args:
-        x (Tile): LHS of the matmul
-        y (Tile): RHS of the matmul
+        x (Tile): LHS of the matmul, 1D, 2D, or 3D
+        y (Tile): RHS of the matmul, 1D, 2D, or 3D
 
-    If `x` and `y` have different dtype, they will be promoted to common dtype.
+    Supported input datatypes: [f16, bf16, f32, f64, tf32, f8e4m3fn, f8e5m2, i8, u8]
+
+    If `x` and `y` have different dtype, they will first be promoted to common
+    dtype. The result dtype is the same as the promoted input types.
     Shape of `x` and `y` will be broadcasted to up until the last two axes.
 
     Returns:
