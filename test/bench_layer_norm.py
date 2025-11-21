@@ -86,7 +86,7 @@ class CuTileLayerNorm(torch.autograd.Function):
         mean = torch.empty(M, dtype=torch.float32, device=x.device)
         rstd = torch.empty(M, dtype=torch.float32, device=x.device)
 
-        TILE_N = 256
+        TILE_N = 1024
         ct.launch(torch.cuda.current_stream(), (M,), layer_norm_fwd,
                   (x, weight, bias, y, mean, rstd, eps, TILE_N))
 

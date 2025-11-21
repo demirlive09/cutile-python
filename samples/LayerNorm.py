@@ -121,7 +121,7 @@ def layer_norm_bwd_dx_partial_dwdb(DX, DY, DW, DB, X, W, Mean, Rstd, Locks, TILE
         partial_dw = (tdy * xhat).astype(DW.dtype)
         partial_db = tdy.astype(DB.dtype)
 
-        while ct.atomic_cas(Locks, group_bid_m, 0, 1) == 1:
+        while ct.atomic_cas(Locks, group_bid_m, 0, 1, memory_order=ct.MemoryOrder.ACQUIRE) == 1:
             pass
 
         # Accumulate partial weight/bias gradients
@@ -130,7 +130,7 @@ def layer_norm_bwd_dx_partial_dwdb(DX, DY, DW, DB, X, W, Mean, Rstd, Locks, TILE
         ct.store(DW, index=(group_bid_m, j), tile=partial_dw)
         ct.store(DB, index=(group_bid_m, j), tile=partial_db)
 
-        ct.atomic_xchg(Locks, group_bid_m, 0)
+        ct.atomic_xchg(Locks, group_bid_m, 0, memory_order=ct.MemoryOrder.RELEASE)
 
 
 @ct.kernel
@@ -195,7 +195,7 @@ class CuTileLayerNorm(torch.autograd.Function):
         mean = torch.empty(M, dtype=torch.float32, device=x.device)
         rstd = torch.empty(M, dtype=torch.float32, device=x.device)
 
-        TILE_N = 256
+        TILE_N = 1024
         # Launch the forward kernel with a 1D grid (M blocks)
         ct.launch(torch.cuda.current_stream(), (M,), layer_norm_fwd,
                   (x, weight, bias, y, mean, rstd, eps, TILE_N))

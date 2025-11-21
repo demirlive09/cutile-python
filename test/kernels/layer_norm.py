@@ -115,7 +115,7 @@ def layer_norm_bwd_dx_partial_dwdb(DX, DY, DW, DB, X, W, Mean, Rstd, Locks, TILE
         partial_dw = (tdy * xhat).astype(DW.dtype)
         partial_db = tdy.astype(DB.dtype)
 
-        while ct.atomic_cas(Locks, group_bid_m, 0, 1) == 1:
+        while ct.atomic_cas(Locks, group_bid_m, 0, 1, memory_order=ct.MemoryOrder.ACQUIRE) == 1:
             pass
 
         # Accumulate partial weight/bias gradients
@@ -124,7 +124,7 @@ def layer_norm_bwd_dx_partial_dwdb(DX, DY, DW, DB, X, W, Mean, Rstd, Locks, TILE
         ct.store(DW, index=(group_bid_m, j), tile=partial_dw)
         ct.store(DB, index=(group_bid_m, j), tile=partial_db)
 
-        ct.atomic_xchg(Locks, group_bid_m, 0)
+        ct.atomic_xchg(Locks, group_bid_m, 0, memory_order=ct.MemoryOrder.RELEASE)
 
 
 @ct.kernel
