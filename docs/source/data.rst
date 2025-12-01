@@ -158,7 +158,7 @@ Tuples can be used in |tile code|. They cannot be |kernel| parameters.
 Rounding Modes
 --------------
 
-.. autoclass:: cuda.tile.RoundingMode
+.. autoclass:: cuda.tile.RoundingMode()
    :members:
    :undoc-members:
    :member-order: bysource
@@ -166,7 +166,7 @@ Rounding Modes
 Padding Modes
 -------------
 
-.. autoclass:: cuda.tile.PaddingMode
+.. autoclass:: cuda.tile.PaddingMode()
    :members:
    :undoc-members:
    :member-order: bysource

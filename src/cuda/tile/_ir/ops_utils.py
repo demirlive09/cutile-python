@@ -163,7 +163,7 @@ def check_rd_and_ftz(fn: str, rounding_mode: Optional[RoundingMode], flush_to_ze
 
 
 memory_scope_to_bytecode = {
-    MemoryScope.TL_BLK: bc.MemoryScope.TL_BLK,
+    MemoryScope.BLOCK: bc.MemoryScope.TL_BLK,
     MemoryScope.DEVICE: bc.MemoryScope.DEVICE,
     MemoryScope.SYS: bc.MemoryScope.SYS
 }

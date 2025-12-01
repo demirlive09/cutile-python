@@ -102,14 +102,17 @@ Object Model & Lifetimes
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
 All objects created within |tile code| are immutable.
-Any operation that conceptually modifies an object or its attributes shall create and return a new
+Any operation that conceptually modifies an object or its attributes creates and returns a new
 object.
-Attributes shall not be dynamically added to objects.
+Attributes cannot be dynamically added to objects.
 
 The only mutable objects that can be used in |tile code| are |arrays|, which must be passed in as
 |kernel| parameters.
-The caller of a |kernel| shall ensure that any |arrays| passed to the |kernel| shall not be
-destroyed until the |kernel| has finished execution.
+
+The caller of a |kernel| must ensure that:
+
+- No |arrays| passed to the |kernel| alias one another.
+- All passed |arrays| remain valid until the |kernel| has finished execution.
 
 Control Flow
 ~~~~~~~~~~~~

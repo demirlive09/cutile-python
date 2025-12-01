@@ -258,9 +258,16 @@ def test_atomic_cas(x_dtype, y_dtype, mode):
         assert_equal(z, ref_z)
 
 
+ct_scope_to_tileir_scope = {
+    ct.MemoryScope.BLOCK: "tl_blk",
+    ct.MemoryScope.DEVICE: "device",
+    ct.MemoryScope.SYS: "sys"
+}
+
+
 @pytest.mark.use_mlir
 @pytest.mark.parametrize("order", [None, "RELAXED", "ACQUIRE", "RELEASE", "ACQ_REL"])
-@pytest.mark.parametrize("scope", [None, "TL_BLK", "DEVICE", "SYS"])
+@pytest.mark.parametrize("scope", [None, "BLOCK", "DEVICE", "SYS"])
 def test_atomic_order_scope(order, scope, tmp_path):
     name = f"atomic_order_scope_{order}_{scope}"
     args = ""
@@ -280,7 +287,7 @@ def test_atomic_order_scope(order, scope, tmp_path):
         args += f", memory_scope={scope_enum}"
     else:
         scope_enum = "ct.MemoryScope.DEVICE"
-    check_directive += f" {eval(scope_enum).value}"
+    check_directive += f" {ct_scope_to_tileir_scope[eval(scope_enum)]}"
 
     source = array_order_scope_template.format(name=name, args=args)
     kernel = jit_kernel(name, source, tmp_path)
