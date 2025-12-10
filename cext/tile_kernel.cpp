@@ -918,6 +918,7 @@ struct CompareKey <Vec<PyTypeObject*>, Vec<PyPtr>> {
 
 struct TileContext {
     PyPtr config;
+    PyPtr autotune_cache;
 };
 
 
@@ -1318,16 +1319,41 @@ static int TileContext_init(PyObject* self, PyObject* args, PyObject* kwargs) {
         return -1;
     TileContext& context = py_unwrap<TileContext>(self);
     context.config = newref(config);
+
+    // autotune cache starts with None.
+    context.autotune_cache = newref(Py_None);
+
     return 0;
 }
+
 
 static PyObject * TileContext_get_config(PyObject* self, void *closure) {
     return Py_NewRef(py_unwrap<TileContext>(self).config.get());
 }
 
 
+static PyObject * TileContext_get_autotune_cache(PyObject* self, void *closure) {
+    return Py_NewRef(py_unwrap<TileContext>(self).autotune_cache.get());
+}
+
+static int TileContext_set_autotune_cache(PyObject* self, PyObject* value, void* closure) {
+    TileContext& context = py_unwrap<TileContext>(self);
+
+    // `del ctx.autotune_cache` → set back to None
+    if (value == NULL) {
+        context.autotune_cache = newref(Py_None);
+        return 0;
+    }
+    context.autotune_cache = newref(value);
+    return 0;
+}
+
 static PyGetSetDef TileContext_getsetters[] = {
     {"config", (getter)TileContext_get_config, nullptr},
+    {"autotune_cache",
+        (getter)TileContext_get_autotune_cache,
+        (setter)TileContext_set_autotune_cache,
+        nullptr},
     {nullptr}  /* Sentinel */
 };
 
@@ -1643,13 +1669,19 @@ static PyTypeObject ArraySpecialization_type = {
 static Status init_default_tile_context() {
     PyPtr context_module = steal(PyImport_ImportModule("cuda.tile._context"));
     if (!context_module) return ErrorRaised;
+
     PyPtr default_context_config = steal(
         PyObject_CallMethod(context_module.get(), "init_context_config_from_env", "")
     );
     if (!default_context_config) return ErrorRaised;
+
     g_default_tile_context = pywrapper_new<TileContext>(&TileContext_type, nullptr, nullptr);
     if (!g_default_tile_context) return ErrorRaised;
-    py_unwrap<TileContext>(g_default_tile_context).config = default_context_config;
+    TileContext& tile_context = py_unwrap<TileContext>(g_default_tile_context);
+    tile_context.config = default_context_config;
+
+    tile_context.autotune_cache = newref(Py_None);
+
     return OK;
 };
 

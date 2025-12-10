@@ -7,18 +7,28 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Iterable, Callable, Sequence
 
-import cuda.tile as ct
 from cuda.tile._execution import TileDispatcher
 from cuda.tile._exception import TileCompilerTimeoutError, TileCompilerExecutionError
 from cuda.tile._cext import default_tile_context
 import random
 import torch
 import logging
-
+import functools
+import threading
 
 logger = logging.getLogger(__name__)
 
 _MAX_SEARCH_ITEMS = 10_000  # safety cap for very large / infinite streams
+
+_autotune_lock = threading.RLock()
+
+
+def _with_autotune_lock(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        with _autotune_lock:
+            return func(*args, **kwargs)
+    return wrapper
 
 
 def _shape_dtype_stride(arg: Any) -> tuple[tuple[int, ...], str, tuple[int, ...] | None]:
@@ -93,13 +103,8 @@ class _CacheEntry:
     tuning_record: Sequence[tuple[Any, float]]
 
 
-# Two-level cache:
-#   outer: kernel key (e.g., kernel._pyfunc)
-#   inner: _default_key or user-provided key
-_autotuned_cache: dict[Any, dict[Any, _CacheEntry]] = {}
-
-
-def clear_cache(*, kernel: TileDispatcher | None = None, key: Any | None = None):
+@_with_autotune_lock
+def clear_autotune_cache(*, kernel: TileDispatcher | None = None, key: Any | None = None):
     """Clear entries from the autotuner cache.
 
     The cache is organized as a two-level mapping:
@@ -113,15 +118,17 @@ def clear_cache(*, kernel: TileDispatcher | None = None, key: Any | None = None)
             If provided, restricts clearing to this argument key.
             If ``None``, all keys at the selected level are cleared.
     """
+    autotune_cache = default_tile_context.autotune_cache
+    if autotune_cache is None:
+        return
+
     if kernel is None:
-        if key is None:
-            _autotuned_cache.clear()
-        else:
-            for per_kernel in _autotuned_cache.values():
-                per_kernel.pop(key, None)
+        if key is not None:
+            raise ValueError("key must be None when kernel is None")
+        autotune_cache.clear()
     else:
         kernel_key = kernel._pyfunc
-        per_kernel = _autotuned_cache.get(kernel_key)
+        per_kernel = autotune_cache.get(kernel_key)
         if per_kernel is None:
             return
         if key is None:
@@ -245,6 +252,8 @@ def autotune_launch(stream, grid_fn, kernel,
             re-run the search. The new best config is then written back
             to the cache.
     """
+    import cuda.tile as ct
+
     if callable(search_space):
         search_space = search_space()
 
@@ -258,71 +267,80 @@ def autotune_launch(stream, grid_fn, kernel,
     if len(search_space) == 0:
         raise ValueError("Search space must contain at least 1 configuration")
 
-    kernel_key = kernel._pyfunc
-    per_kernel = _autotuned_cache.get(kernel_key)
-    if per_kernel is None:
-        per_kernel = {}
-        _autotuned_cache[kernel_key] = per_kernel
-    # _default_key is in the critical path for launch, it can add some overhead.
-    if key is None:
-        arg_key = _default_key(args_fn(search_space[0]))
-    else:
-        arg_key = key
+    # --------- Tuning + cache updates under the autotune lock --------- #
+    with _autotune_lock:
+        autotune_cache = default_tile_context.autotune_cache
+        if autotune_cache is None:
+            autotune_cache = {}
+            default_tile_context.autotune_cache = autotune_cache
 
-    tuning_entries: list[tuple[Any, float]] = []
-    cache_hit = False
+        kernel_key = kernel._pyfunc
+        per_kernel = autotune_cache.get(kernel_key)
+        if per_kernel is None:
+            per_kernel = {}
+            autotune_cache[kernel_key] = per_kernel
+        # _default_key is in the critical path for launch, it can add some overhead.
+        if key is None:
+            arg_key = _default_key(args_fn(search_space[0]))
+        else:
+            arg_key = key
 
-    if not force_retune and arg_key in per_kernel:
-        logger.debug(f"Using cached config for key {key}")
-        cache_hit = True
-    else:
-        indices = list(range(len(search_space)))
-        rng.shuffle(indices)
+        tuning_entries: list[tuple[Any, float]] = []
+        cache_hit = False
 
-        best_time_ms, best_cfg, best_kernel = float("inf"), None, None
-        for i, cfg_idx in enumerate(indices):
-            cfg = search_space[cfg_idx]
+        if not force_retune and arg_key in per_kernel:
+            logger.debug(f"Using cached config for key {key}")
+            cache_hit = True
+        else:
+            indices = list(range(len(search_space)))
+            rng.shuffle(indices)
 
-            grid = grid_fn(cfg)
-            hints = hints_fn(cfg) if hints_fn else {}
-            updated_kernel = ct.kernel(
-                kernel._pyfunc,
-                **hints
-            )
+            best_time_ms, best_cfg, best_kernel = float("inf"), None, None
+            for i, cfg_idx in enumerate(indices):
+                cfg = search_space[cfg_idx]
 
-            def run_once(args):
-                ct.launch(stream, grid, updated_kernel, args)
-
-            try:
-                with compiler_timeout(compiler_time_limit_sec):
-                    time_ms = _time_ms(
-                        run_once,
-                        get_args=lambda: args_fn(cfg), # noqa
-                        stream=stream,
-                    )
-            except TileCompilerTimeoutError as e:
-                logger.debug(f"{cfg} compilation timeout: {e}")
-                continue
-            except TileCompilerExecutionError as e:
-                logger.debug(f"{cfg} compilation error: {e}")
-                continue
-
-            if time_ms < best_time_ms:
-                best_time_ms = time_ms
-                best_cfg, best_grid, best_kernel = cfg, grid, updated_kernel
-                logger.debug(
-                    f"Iteration {i} updated best config to {cfg}: {best_time_ms} ms"
+                grid = grid_fn(cfg)
+                hints = hints_fn(cfg) if hints_fn else {}
+                updated_kernel = ct.kernel(
+                    kernel._pyfunc,
+                    **hints
                 )
-            # Record the tuning result
-            tuning_entries.append((cfg, time_ms))
 
-        # Save the best config and kernel.
-        if best_cfg is None:
-            raise ValueError("No valid config found")
-        per_kernel[arg_key] = _CacheEntry(best_cfg, best_grid, best_kernel, tuning_entries)
+                def run_once(args):
+                    ct.launch(stream, grid, updated_kernel, args)
 
-    # Lanunch the kernel with the best config
-    cache_entry = per_kernel[arg_key]
+                try:
+                    with compiler_timeout(compiler_time_limit_sec):
+                        time_ms = _time_ms(
+                            run_once,
+                            get_args=lambda: args_fn(cfg), # noqa
+                            stream=stream,
+                        )
+                except TileCompilerTimeoutError as e:
+                    logger.debug(f"{cfg} compilation timeout: {e}")
+                    continue
+                except TileCompilerExecutionError as e:
+                    logger.debug(f"{cfg} compilation error: {e}")
+                    continue
+
+                if time_ms < best_time_ms:
+                    best_time_ms = time_ms
+                    best_cfg, best_grid, best_kernel = cfg, grid, updated_kernel
+                    logger.debug(
+                        f"Iteration {i} updated best config to {cfg}: {best_time_ms} ms"
+                    )
+                # Record the tuning result
+                tuning_entries.append((cfg, time_ms))
+
+            # Save the best config and kernel.
+            if best_cfg is None:
+                raise ValueError("No valid config found")
+            per_kernel[arg_key] = _CacheEntry(best_cfg, best_grid, best_kernel, tuning_entries)
+
+        # Lanunch the kernel with the best config
+        cache_entry = per_kernel[arg_key]
+
+    # --------- Launch outside the lock --------- #
 
     # Use the original runtime arguments to run the kernel with the best config
     best_args = (

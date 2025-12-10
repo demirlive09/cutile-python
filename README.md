@@ -111,6 +111,28 @@ This makes sure that the `pip install -e .` command above is needed only once, a
 the extension after making changes to the C++ code can be done with `make -C build`
 which is much faster. This logic is defined in [setup.py](./setup.py).
 
+Experimental Features (Optional)
+--------------------------------
+cuTile now provides an experimental package containing APIs that are still under active development.
+These are **not** part of the stable `cuda.tile` API and may change.
+
+To enable the experimental features when working from a source checkout, install the experimental
+package from the repository root:
+```
+pip install ./experimental
+```
+
+You can also install it directly from a GitHub repository subdirectory:
+```
+pip install \
+  "git+https://github.com/NVIDIA/cutile-python.git#egg=cuda-tile-experimental&subdirectory=experimental"
+```
+
+For example, this will make the experimental namespace available for autotuner:
+```
+from cuda.tile_experimental import autotune_launch, clear_autotune_cache
+```
+
 Running Tests
 -------------
 cuTile uses the [pytest](https://pytest.org) framework for testing.

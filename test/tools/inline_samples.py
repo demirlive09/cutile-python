@@ -347,13 +347,6 @@ def main():
         if _check_or_update_file(sample_path, expected_text, args.check):
             changes_detected = True
 
-    # Copy the autotuner.py to the samples directory
-    autotuner_path = ROOT / "test" / "autotuner" / "autotuner.py"
-    samples_autotuner_path = SAMPLES_DIR / "utils" / "autotuner.py"
-    expected_autotuner_text = autotuner_path.read_text(encoding="utf-8")
-    if _check_or_update_file(samples_autotuner_path, expected_autotuner_text, args.check):
-        changes_detected = True
-
     if args.check:
         if changes_detected:
             print(

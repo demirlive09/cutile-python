@@ -9,8 +9,8 @@ import math
 from functools import partial
 from util import assert_equal
 
-import autotuner.autotuner as autotuner_mod
-from autotuner.autotuner import autotune_launch, clear_cache
+import cuda.tile_experimental._autotuner as autotuner_mod
+from cuda.tile_experimental import autotune_launch, clear_autotune_cache
 from cuda.tile._cext import default_tile_context
 from cuda.tile._exception import TileCompilerTimeoutError, TileCompilerExecutionError
 
@@ -43,7 +43,7 @@ def _patch_timer_and_launch(monkeypatch):
 
 
 # ========== Test Clear Cache ==========#
-def test_clear_cache(_patch_timer_and_launch):
+def test_clear_autotune_cache(_patch_timer_and_launch):
     x = torch.empty((256,), device="cuda")
 
     grid_fn = partial(grid_fn_on_x, x)
@@ -54,45 +54,58 @@ def test_clear_cache(_patch_timer_and_launch):
     search_space = [64, 128]
 
     # 1) Clear entire cache → next tune for dummy_kernel should re-benchmark
-    clear_cache()
+    clear_autotune_cache()
     autotune_launch(
         torch.cuda.current_stream(), grid_fn, dummy_kernel, args_fn,
         search_space=search_space
     )
     first_count = _patch_timer_and_launch["count"]
-    assert first_count > 0, "Expected timing to run after clear_cache()"
+    assert first_count > 0, "Expected timing to run after clear_autotune_cache()"
 
-    # 2) Clear by key only
-    clear_cache()
+    # 2) Clear by kernel + key
+    clear_autotune_cache()
     default_key = autotuner_mod._default_key(args_fn(search_space[0]))
     custom_key = (0.0, )
+
+    # populate cache for default key
     autotune_launch(
         torch.cuda.current_stream(), grid_fn, dummy_kernel, args_fn,
         search_space=search_space
     )
+    # populate cache for custom key
     autotune_launch(
         torch.cuda.current_stream(), grid_fn, dummy_kernel, args_fn, key=custom_key,
         search_space=search_space
     )
+
     before_key_clear = _patch_timer_and_launch["count"]
-    clear_cache(key=default_key)
+
+    # now clear only the entry for (dummy_kernel, default_key)
+    clear_autotune_cache(kernel=dummy_kernel, key=default_key)
+
+    # default key should re-tune
     autotune_launch(
         torch.cuda.current_stream(), grid_fn, dummy_kernel, args_fn,
         search_space=search_space
     )
     after_key_clear = _patch_timer_and_launch["count"]
-    assert after_key_clear > before_key_clear, "Expected re-tune after clear_cache(key=default_key)"
+    assert after_key_clear > before_key_clear, (
+        "Expected re-tune after clear_autotune_cache(kernel=dummy_kernel, key=default_key)"
+    )
+
+    # custom key should not re-tune
     autotune_launch(
         torch.cuda.current_stream(), grid_fn, dummy_kernel, args_fn, key=custom_key,
         search_space=search_space
     )
     after_custom_key_clear = _patch_timer_and_launch["count"]
     assert after_custom_key_clear == after_key_clear, (
-        "Expected no additional timing calls after clear_cache(key=default_key)"
+        "Expected no additional timing calls after "
+        "clear_autotune_cache(kernel=dummy_kernel, key=default_key)"
     )
 
     # 3) Clear by kernel only
-    clear_cache()
+    clear_autotune_cache()
     autotune_launch(
         torch.cuda.current_stream(), grid_fn, dummy_kernel, args_fn,
         search_space=search_space
@@ -102,22 +115,27 @@ def test_clear_cache(_patch_timer_and_launch):
         search_space=search_space
     )
     before_kernel_clear = _patch_timer_and_launch["count"]
-    clear_cache(kernel=dummy_kernel)
+
+    clear_autotune_cache(kernel=dummy_kernel)
+
+    # dummy_kernel should re-tune
     autotune_launch(
         torch.cuda.current_stream(), grid_fn, dummy_kernel, args_fn,
         search_space=search_space
     )
     after_kernel_clear = _patch_timer_and_launch["count"]
     assert after_kernel_clear > before_kernel_clear, (
-        "Expected timing to run after clear_cache(kernel=dummy_kernel)"
+        "Expected timing to run after clear_autotune_cache(kernel=dummy_kernel)"
     )
+
+    # other_dummy_kernel should not re-tune
     autotune_launch(
         torch.cuda.current_stream(), grid_fn, other_dummy_kernel, args_fn,
         search_space=search_space
     )
     after_other_kernel_clear = _patch_timer_and_launch["count"]
     assert after_other_kernel_clear == after_kernel_clear, (
-        "Expected no additional timing calls after clear_cache(kernel=dummy_kernel)"
+        "Expected no additional timing calls after clear_autotune_cache(kernel=dummy_kernel)"
     )
 
 
@@ -128,7 +146,7 @@ def test_different_keys_same_kernel(_patch_timer_and_launch):
     grid_fn = partial(grid_fn_on_x, x)
     custom_key = (0.0, )
 
-    clear_cache()
+    clear_autotune_cache()
     # 1) First tune
     res1 = autotune_launch(
         torch.cuda.current_stream(),
@@ -178,7 +196,7 @@ def test_different_kernels_same_key(_patch_timer_and_launch):
 
     grid_fn = partial(grid_fn_on_x, x)
     custom_key = (0.0, )
-    clear_cache()
+    clear_autotune_cache()
     # 1) First tune
     res1 = autotune_launch(
         torch.cuda.current_stream(),
@@ -232,7 +250,7 @@ def test_custom_tuning_args(monkeypatch):
     # Custom value: a recognizable tensor
     custom_x = torch.full_like(x, 7)
 
-    clear_cache()
+    clear_autotune_cache()
     tuned_result = autotune_launch(
         stream=torch.cuda.current_stream(),
         grid_fn=partial(grid_fn_on_x, x),
@@ -279,7 +297,7 @@ def test_autotune_handles_timeout_and_raises_when_all_configs_fail(monkeypatch, 
 
     monkeypatch.setattr(autotuner_mod, "_time_ms", fake_time_ms, raising=True)
 
-    clear_cache()
+    clear_autotune_cache()
     # No timeout
     with caplog.at_level("DEBUG"):
         autotune_launch(
@@ -313,7 +331,7 @@ def test_autotune_handles_timeout_and_raises_when_all_configs_fail(monkeypatch, 
 def test_search_space_callable(_patch_timer_and_launch):
     x = torch.empty((256,), device="cuda")
 
-    clear_cache()
+    clear_autotune_cache()
     autotune_launch(
         stream=torch.cuda.current_stream(),
         grid_fn=partial(grid_fn_on_x, x),
@@ -336,7 +354,7 @@ def test_search_space_iterator_support(_patch_timer_and_launch):
         for cfg in [64, 128]:
             yield cfg
 
-    clear_cache()
+    clear_autotune_cache()
     stream = torch.cuda.current_stream()
     grid_fn = partial(grid_fn_on_x, x)
 
@@ -358,7 +376,7 @@ def test_max_iter_limits_number_of_timed_configs(_patch_timer_and_launch):
     search_space = list(range(32, 32 + 20))  # 20 configs
     max_iter = 5
 
-    clear_cache()
+    clear_autotune_cache()
     autotune_launch(
         stream=torch.cuda.current_stream(),
         grid_fn=partial(grid_fn_on_x, x),
@@ -381,7 +399,7 @@ def test_force_retune_ignores_cache_and_rebenchmarks(_patch_timer_and_launch):
     def args(cfg):
         return (x, cfg)
 
-    clear_cache()
+    clear_autotune_cache()
     stream = torch.cuda.current_stream()
     grid_fn = partial(grid_fn_on_x, x)
 
@@ -431,7 +449,7 @@ def test_autotune_skips_execution_error_and_uses_other_configs(monkeypatch):
     monkeypatch.setattr(autotuner_mod, "_time_ms", fake_time_ms, raising=True)
     monkeypatch.setattr(ct, "launch", lambda *a, **k: None, raising=True)
 
-    clear_cache()
+    clear_autotune_cache()
     # Should not raise, because at least one config (the second) succeeds.
     autotune_launch(
         stream=torch.cuda.current_stream(),

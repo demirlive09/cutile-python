@@ -4,12 +4,16 @@
 
 import argparse
 import cuda.tile as ct
+try:
+    import cuda.tile_experimental as ct_experimental
+except ImportError:
+    ct_experimental = None
 import torch
 import math
+import sys
 
 from torch.nn.functional import scaled_dot_product_attention
 from torch.nn.attention import sdpa_kernel, SDPBackend
-from utils.autotuner import autotune_launch
 from utils.benchmark import report_benchmark
 from types import SimpleNamespace
 from test.kernels.attention import fmha_kernel
@@ -120,7 +124,7 @@ def cutile_autotune_fmha(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor,
     Out = torch.empty((Batch, Heads, SeqLen_Q, D_v), dtype=Q.dtype, device=Q.device)
 
     # --- Tune/Get the best configuration for the FMHA Kernel ---
-    tuned_result = autotune_launch(
+    tuned_result = ct_experimental.autotune_launch(
         torch.cuda.current_stream(),
         grid_fn=lambda cfg: (math.ceil(SeqLen_Q / cfg.TILE_M), Batch * Heads, 1),
         kernel=fmha_kernel,
@@ -238,6 +242,10 @@ if __name__ == "__main__":
         print("Correctness check disabled")
 
     # Test 3: Causal Attention with autotuning and performance benchmarking.
+    if ct_experimental is None:
+        print("cuda.tile_experimental not available, skipping autotuning test")
+        sys.exit(0)
+
     print("\n--- Test 3: Causal Attention with autotuning and performance benchmarking ---")
     # --- Increase the problem size ---
     BATCH_SIZE = 8

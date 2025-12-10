@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Any, Sequence
+
+from torch.autograd.function import AUTOGRAD_FUNCTION_COUNTER
 from cuda.tile._context import TileContextConfig
 
 
@@ -25,6 +27,14 @@ class TileContext:
 
     @property
     def config(self) -> TileContextConfig:
+        ...
+
+    @property
+    def autotune_cache(self) -> Any | None:
+        ...
+
+    @autotune_cache.setter
+    def autotune_cache(self, value: Any | None):
         ...
 
 

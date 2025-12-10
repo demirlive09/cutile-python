@@ -7,13 +7,13 @@ from conftest import dtype_id, shape_id
 import pytest
 import torch
 import cuda.tile as ct
+import cuda.tile_experimental as ct_experimental
 import itertools
 from math import ceil
 from util import estimate_bench_iter, next_power_of_2
 from kernels.rms_norm import (
     rms_norm_kernel, rms_norm_kernel_gather, rms_norm_kernel_static_persistent
 )
-from autotuner.autotuner import autotune_launch
 from functools import partial
 from types import SimpleNamespace
 
@@ -164,7 +164,7 @@ def _static_persistent_autotune_predicate(x, cfg):
 
 
 def _rms_norm_static_persistent_base(stream, x, y, weight, eps):
-    autotune_launch(
+    ct_experimental.autotune_launch(
         stream,
         grid_fn=partial(_static_persistent_autotune_grid, x),
         kernel=rms_norm_kernel_static_persistent,
@@ -195,7 +195,7 @@ def _standard_autotune_configs():
 
 
 def _rms_norm_standard_gather_base(stream, x, weight, y, rstd, N, eps):
-    autotune_launch(
+    ct_experimental.autotune_launch(
         stream,
         grid_fn=lambda cfg: (x.shape[0], ),
         kernel=rms_norm_kernel_gather,
@@ -210,7 +210,7 @@ def _rms_norm_standard_gather_base(stream, x, weight, y, rstd, N, eps):
 
 
 def _rms_norm_standard_tiled_base(stream, x, weight, y, rstd, N, eps):
-    autotune_launch(
+    ct_experimental.autotune_launch(
         stream,
         grid_fn=lambda cfg: (x.shape[0], ),
         kernel=rms_norm_kernel,
