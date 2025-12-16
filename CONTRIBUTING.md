@@ -24,7 +24,18 @@ into three categories:
 
 ## Code contributions
 
-Code contribution is currently not open until we establish our Github CI. Please stay tuned.
+You are welcome to make a pull request from your fork. Please ensure your change
+meets the quality standard of the codebase.
+
+Due to the limitation of Github CI, the main development is still happening in our
+internal repository. We will provide a minimal CI in Github for you to iterate
+on your changes. Once your PR passes the Github CI,
+a reviewer will review the code. If it looks good, the reviewer will
+test your change in our internal repository to ensure the change
+passes the full CI check. Once it is merged into internal repository,
+the change will be synced to the public Github repository and the PR will be marked
+as "resolved" and closed.
+
 
 ### Your first issue
 
